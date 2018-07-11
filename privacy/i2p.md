@@ -17,7 +17,7 @@ Furthermore, a transparent proxy allows us to handle traffic to the I2P-network 
 # Theory of operation #
 DNS requests from any appVM routed through the I2P-proxyVM are intercepted and answered with a localnet-IP if the domain ends in `.i2p`, otherwise the tor-dns-service is requested.
 Any http requests to the localnet-IP again is intercepted and routed to tinyproxy, which repackages the requests into proxy-requests and sends them to the local I2P-server.
-All other tcp-requests are routed through TOR.
+All other tcp-requests are routed through Tor.
 
 # Tor #
 Torifying traffic allows access to tor hidden nodes.
@@ -28,23 +28,27 @@ Assume I have no idea what I'm doing.
 The result of this guide should be seen more adding access to I2P Hidden Services more than protecting your privacy with the I2P network.
 
 ## Quick Note on I2P-Over-Tor ##
-There is an excellent guide on how to use [I2P over TOR via whonix][whonix-I2P].
-However, this adds load to the tor-network.
+There is an excellent guide on how to use [I2P over Tor via whonix][whonix-I2P].
+However, this adds load to the Tor network.
 Since the main purpose of this guide is to access the I2P-network, the performance cost overshadowed the security benefits.
 
 ## Qubes 3.2 ##
 ### TemplateVM setup ###
 This guide builds a proxyVM based on a Debian template.
 
+* **(Recommended)** Install debian-9 template in dom0:
+      sudo qubes-dom0-upgrade qubes-template-debian-9
+  This guide will move forward using `debian-9`. If you want to install i2p in a `debian-8` template, make sure to replace any version-specific numbering or naming. (i.e. replace "stretch" with "jessie")
+
 * **(Optional)** If you want to use a separate vm template for your I2P-proxyVM, clone your Debian template: (run in dom0)*
 
-    qvm-clone debian-8 debian-8-gate
+    qvm-clone debian-9 debian-9-gate
 
 ### Install the necessary tools in the templateVM ###
 I2P install instructions can be found [here][i2p-debian-instructions].
-This guide assumes debian-8, other versions please reference the according instructions.
-TOR can be installed from default debian-repos.
-tinyproxy and dnsmasq can be installed from debian-repos, but are already installed by default in qubes' debian-8.
+This guide assumes debian-9, other versions please reference the according instructions.
+Tor can be installed from default debian-repos.
+tinyproxy and dnsmasq can be installed from debian-repos, but are already installed by default in qubes' debian-9.
 
 1. Add the repo-key for I2P's Debian repository to apt:
   Download:
@@ -53,13 +57,17 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
 
   Confirm fingerprint:
 
+      gpg --dry-run --import --import-options import-show i2p-debian-repo.key.asc
+
+  gpg got a major revision upgrade missing in debian-8. In debian-8, run instead
+
       gpg --with-fingerprint i2p-debian-repo.key.asc
 
   (this needs no keyring, so qubes-gpg-client is unnecessary)
-  Command should yield:
+  Command should yield: (in debian-9)
 
-      pub  4096R/5BCF1346 2013-10-10 I2P Debian Package Repository <killyourtv@i2pmail.org>
-          Key fingerprint = 7840 E761 0F28 B904 7535  49D7 67EC E560 5BCF 1346
+      pub   rsa4096 2013-10-10 [SC] [expires: 2018-10-13]
+        7840E7610F28B904753549D767ECE5605BCF1346
 
   Add key to apt:
 
@@ -67,9 +75,9 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
       rm i2p-debian-repo.key.asc
 
 
-2. Add repo to your sources via or nano:
+2. Add repo to your sources via vim or nano:
 
-      nano /etc/apt/sources.lists.d/i2p.list
+      sudo nano /etc/apt/sources.lists.d/i2p.list
 
   content:
 
@@ -79,7 +87,7 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
 3. Install I2P, tor, tinyproxy and dnsmasq:
 
       sudo apt-get update
-      sudo apt-get install i2p i2p-keyring tinyproxy dnsmasq-base
+      sudo apt-get install tor i2p i2p-keyring tinyproxy dnsmasq-base
 
 
 4. Configure I2P service:
@@ -124,14 +132,29 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
 
   If you do not want to do that but rather have VM specific configs, save a copy of your config in `/rw/config` and copy them back to their designated folders on startup:
 
-      sudo cp /usr/share/i2p/clients.config /rw/config
+      sudo cp /var/lib/i2p/i2p-config/clients.config /rw/config
 
   Add the following lines to your `/rw/config/rc.local` script:
 
       cp /rw/config/clients.config /usr/share/i2p/clients.config
       cp /rw/config/clients.config /var/lib/i2p/i2p-config/clients.config
+      cat /rw/config/router.addendum >> /var/lib/i2p/i2p-config/router.config
 
-  (For some reason, sometimes one file is used and sometimes the other, I have not figured out why.)
+  `router.config` is used to safe some contantly updated data (e.g. last time news was checked), so lines need to be *added*, not *replaced*.
+
+  The following lines need to be **added** to `/var/lib/i2p/i2p-config/router.config` in templateVM or written to `/rw/config/router.addendum` in AppVM:
+
+      router.reseedProxy.authEnable=false
+      router.reseedProxyEnable=false
+      router.reseedSSLDisable=false
+      router.reseedSSLProxy.authEnable=false
+      router.reseedSSLProxyEnable=true
+      router.reseedSSLProxyHost=127.0.0.1
+      router.reseedSSLProxyPort=9050
+      router.reseedSSLProxyType=SOCKS5
+      router.reseedSSLRequired=false
+
+  This causes I2P to search for nodes via the Tor network instead of the clearnet.
 
   To allow the i2p-console to be reachable from another VM, in your config (`/usr/share/i2p/clients.config` in templateVM or `/rw/config/clients.config` in appVM/proxyVM) change the following two lines:
 
@@ -153,8 +176,9 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
 * tinyproxy config
   In the proxyVM, copy the default config:
 
-      sudo cp /etc/tyinproxy.conf /rw/config
+      sudo cp /etc/tinyproxy/tyinproxy.conf /rw/config
 
+  (In debian-8, config path is `/etc/tinyproxy.conf`.)
   The important settings to add are:
 
       upstream 127.0.0.1:4444
@@ -172,7 +196,7 @@ tinyproxy and dnsmasq can be installed from debian-repos, but are already instal
 
 * tor config
   tor is used as is.
-  Configuration may be edited to suit your needs, please refer to the [TOR guide][tor-guide].
+  Configuration may be edited to suit your needs, please refer to the [Tor guide][tor-guide].
   (But be advised to adapt the routing according to your port configuration!)
 
 ### Startup scripts ###
@@ -201,7 +225,7 @@ code of `/rw/config/config.sh`:
     export TOR_DNS_PORT=8053         #tor's DNS server
 
     export I2P_HTTP=4444             #I2P HTTP-Proxy port
-    export I2P_PORTS=7650            #I2P control-port
+    export I2P_PORTS=7657            #I2P control-port
 
 The variable I2P_PORTS exists for future expansion.
 Want to use I2P-IRC? add port 6668.
@@ -209,6 +233,8 @@ Want to use I2CP? add port 7654.
 A complete list can be found [here][i2p-ports].
 Some changes to the i2p-config may be required as well.
 Separate ports by comma (`,`), define ranges with colon (`:`, e.g. `7560:7668`).
+
+IMPORTANT: By default, `rw.local` starts with `#!/bin/sh`, which disables the `source`-command. Start with `#!/bin/bash` instead!
 
 Relevant code of `/rw/config/rc.local`:
 
@@ -225,8 +251,7 @@ Relevant code of `/rw/config/rc.local`:
         --DNSListenAddress $QUBES_IP \
         --DNSPort $TOR_DNS_PORT \
         --RunAsDaemon 1 \
-        --ControlPort $TOR_CTRL_PORT \
-        || (echo "Error starting TOR!", QUBES_IP="127.0.0.1")
+        || (echo "Error starting Tor!", QUBES_IP="127.0.0.1")
 
         #I have no idea what tinyproxy is used for.
         #Killing it may be a bad idea.
@@ -243,7 +268,7 @@ Relevant code of `/rw/config/rc.local`:
       echo "$QUBES_IP is localhost. Not starting!"
     fi
 
-The dnsmasq commandline-options tell it to resolve any `.i2p` toplevel domain to `$TARGET_IP` and query TOR's DNS server for other domains.
+The dnsmasq commandline-options tell it to resolve any `.i2p` toplevel domain to `$TARGET_IP` and query Tor's DNS server for other domains.
 
 Relevant code of `/rw/config/qubes-firewall-user-script`:
 
@@ -263,26 +288,28 @@ Relevant code of `/rw/config/qubes-firewall-user-script`:
     sysctl net.ipv4.ip_forward=1
     sysctl net.ipv4.conf.all.route_localnet=1
 
-    #accept TOR, I2P and tinyproxy
-    iptables -I INPUT -i vif+ -p tcp -m multiport --dport $TOR_TRANS_PORT,$TOR_CTRL_PORT,$I2P_HTTP,$I2P_PORTS,$TINY_PORT -j ACCEPT
+    #accept Tor, I2P and tinyproxy
+    iptables -I INPUT -i vif+ -p tcp -m multiport --dport 53,$TOR_TRANS_PORT,$I2P_HTTP,$I2P_PORTS,$TINY_PORT -j ACCEPT
     iptables -I INPUT -i vif+ -p udp -m multiport --dport 53,$TOR_DNS_PORT -j ACCEPT
 
     #routing
+    #local DNS resolution
+    iptables -t nat -I PREROUTING -i vif+ -p udp --dport 53 -j REDIRECT
+    iptables -t nat -I PREROUTING -i vif+ -p tcp --dport 53 -j REDIRECT #has to happen before Tor grabs all TCP!
+
     #I2P IS FOR ME!
     iptables -t nat -A PREROUTING -i vif+ -p tcp -d $TARGET_IP -m multiport --dport $I2P_HTTP,$I2P_PORTS -j REDIRECT
 
     #HTTP is for tinyproxy!
     iptables -t nat -A PREROUTING -i vif+ -p tcp -d $TARGET_IP --dport 80 -j REDIRECT --to-port $TINY_PORT
 
-    #ALL TCP IS FOR TOR!
-    iptables -t nat -A PREROUTING -i vif+ -p tcp -j REDIRECT --to-port $TOR_TRANS_PORT
+    #ALL TCP IS FOR Tor!
+    iptables -t nat -A PREROUTING -i vif+ -p tcp -j DNAT --to-dstination $QUBES_IP:$TOR_TRANS_PORT
 
-    #local DNS resolution
-    iptables -t nat -I PREROUTING -i vif+ -p udp --dport 53 -j REDIRECT --to-port 53
-
+TCP needs to be DNATed to Tor with `$QUBES_IP` and *not* REDIRECTed!
 
 # Usage #
-Pick any AppVM to access the I2P network or TOR hidden services. Set it's net-vm to the I2P proxyVM.
+Pick any AppVM to access the I2P network or Tor hidden services. Set it's net-vm to the I2P proxyVM.
 Access the router-console by opening a browser and visiting `router.i2p:7567`.
 (Or, truly, any `.i2p`-domain at port :7657)  
 Check I2P is up and has enough connections.
@@ -291,7 +318,7 @@ Click on one of the common pages on the routers home screen, e.g. i2pwiki.i2p!
 # Final thoughts #
 
 ## Troubleshooting ##
-Generally, most Problems can be resolved by waiting long enough for I2P to gather enough connections or restarting I2P.
+Generally, most problems can be resolved by waiting long enough for I2P to gather enough connections or restarting I2P.
 
 #### 404 - tinyproxy can't reach upstream proxy ####
 I2P refuses connections.
